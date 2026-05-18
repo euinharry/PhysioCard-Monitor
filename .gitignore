@@ -1,0 +1,36 @@
+# ─── Node / Vite ──────────────────────────────────────────
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.vite/
+
+# ─── IDE / Editor ─────────────────────────────────────────
+.idea/
+.vscode/
+*.sublime-workspace
+*.swp
+*.swo
+
+# ─── OS ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ─── Environment ──────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ─── Logs ─────────────────────────────────────────────────
+*.log
+npm-debug.log*
+
+# ─── Test Coverage ────────────────────────────────────────
+coverage/
+
+# ─── Swarm / AI Agent artifacts ───────────────────────────
+.swarm/
+.sisyphus/
+.opencode/
+.playwright-mcp/
