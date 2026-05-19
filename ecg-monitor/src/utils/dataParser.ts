@@ -5,6 +5,13 @@ import {
   ECG_LEADS,
   DEFAULT_FRAME_CONFIG,
 } from '../types/ecg';
+import {
+  PhysioParameter,
+  type PhysioFrame,
+  type MultiParamFrameConfig,
+  DEFAULT_MULTI_PARAM_CONFIG,
+  CHANNEL_CONFIGS,
+} from '../types/physio';
 
 // ─── 串口数据解析 ────────────────────────────────────────────
 
@@ -348,4 +355,142 @@ export function parseAndSeparate(
   const parsed = parseSerialData(raw, cfg);
   const valid = parsed.filter(validateData);
   return { data: valid, leads: separateLeads(valid) };
+}
+
+// ─── 多参数帧解析 ─────────────────────────────────────────────
+
+/**
+ * 解析多参数二进制数据（带 Type-ID 字节）
+ * @param raw 原始 ArrayBuffer
+ * @param cfg 多参数帧配置（可选，默认 DEFAULT_MULTI_PARAM_CONFIG）
+ * @returns 解析后的 PhysioFrame 数组
+ */
+export function parseMultiParamBinaryData(
+  raw: ArrayBuffer,
+  cfg: MultiParamFrameConfig = DEFAULT_MULTI_PARAM_CONFIG,
+): PhysioFrame[] {
+  const view = new DataView(raw);
+  const results: PhysioFrame[] = [];
+  let offset = 0;
+
+  while (offset < raw.byteLength) {
+    // 寻找帧头
+    if (!matchHeader(view, offset, cfg)) {
+      offset++;
+      continue;
+    }
+
+    // 读取 Type-ID 字节
+    let param = PhysioParameter.ECG; // 默认
+    const dataStart = offset + cfg.header.length;
+    if (cfg.typeField?.enabled && cfg.typeField.typeMap) {
+      const typeId = view.getUint8(dataStart);
+      param = cfg.typeField.typeMap[typeId] ?? PhysioParameter.ECG;
+    }
+
+    // 计算帧大小（使用 CHANNEL_CONFIGS）
+    const typeSize = cfg.typeField?.enabled ? 1 : 0;
+    const channelConfig = CHANNEL_CONFIGS[param];
+    // 如果没有找到配置，使用旧版 12 导联 ECG 大小
+    const channelCount = channelConfig ? channelConfig.channels.length : 12;
+    const size = cfg.header.length + typeSize + channelCount * cfg.bytesPerSample + cfg.footer.length;
+
+    if (offset + size > raw.byteLength) break;
+
+    // 校验帧尾
+    const footerStart = dataStart + typeSize + channelCount * cfg.bytesPerSample;
+    let footerMatch = true;
+    for (let i = 0; i < cfg.footer.length; i++) {
+      if (view.getUint8(footerStart + i) !== cfg.footer[i]) {
+        footerMatch = false;
+        break;
+      }
+    }
+    if (!footerMatch) { offset++; continue; }
+
+    // 提取各通道数据
+    const channels: Record<string, number> = {};
+    const channelNames = channelConfig ? channelConfig.channels : ECG_LEADS.map(l => l.toString());
+    for (let i = 0; i < channelCount; i++) {
+      const byteOffset = dataStart + typeSize + i * cfg.bytesPerSample;
+      channels[channelNames[i]] = cfg.bytesPerSample === 2
+        ? view.getInt16(byteOffset, true)
+        : view.getInt8(byteOffset);
+    }
+
+    results.push({ parameter: param, timestamp: Date.now(), channels });
+    offset += size;
+  }
+
+  return results;
+}
+
+/** ASCII TYPE 前缀 → PhysioParameter 映射 */
+const ASCII_TYPE_MAP: Record<string, PhysioParameter> = {
+  ECG: PhysioParameter.ECG,
+  SPO2: PhysioParameter.SpO2,
+  RESP: PhysioParameter.Respiration,
+  EMG: PhysioParameter.EMG,
+  TEMP: PhysioParameter.Temperature,
+};
+
+/**
+ * 解析多参数 ASCII 数据（带 TYPE: 前缀）
+ * @param input 原始 ASCII 字符串
+ * @returns 解析后的 PhysioFrame 数组
+ */
+export function parseMultiParamASCIIData(input: string): PhysioFrame[] {
+  if (!input) return [];
+  const results: PhysioFrame[] = [];
+  const lines = input.split(/\r?\n/);
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Check for TYPE: prefix
+    const colonIdx = trimmed.indexOf(':');
+    if (colonIdx === -1) continue;
+
+    const prefix = trimmed.substring(0, colonIdx).toUpperCase();
+    const rest = trimmed.substring(colonIdx + 1).trim();
+
+    const param = ASCII_TYPE_MAP[prefix];
+    if (!param) {
+      // No recognized prefix → try legacy ECG parsing (handled by existing parseASCIIData)
+      continue;
+    }
+
+    const channels: Record<string, number> = {};
+    let valid = true;
+
+    const pairs = rest.split(', ');
+    for (const pair of pairs) {
+      const eqIdx = pair.indexOf(':');
+      if (eqIdx === -1) { valid = false; break; }
+      const key = pair.substring(0, eqIdx).trim();
+      const val = Number(pair.substring(eqIdx + 1).trim());
+      if (!Number.isFinite(val)) { valid = false; break; }
+      channels[key] = val;
+    }
+
+    if (valid && Object.keys(channels).length > 0) {
+      results.push({ parameter: param, timestamp: Date.now(), channels });
+    }
+  }
+
+  return results;
+}
+
+/**
+ * 多参数数据解析便捷流水线
+ * @param raw 原始 ArrayBuffer
+ * @param cfg 多参数帧配置（可选）
+ * @returns 解析后的 PhysioFrame 数组
+ */
+export function parseMultiParamAndRoute(
+  raw: ArrayBuffer,
+  cfg?: MultiParamFrameConfig,
+): PhysioFrame[] {
+  return parseMultiParamBinaryData(raw, cfg);
 }

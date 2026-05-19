@@ -1,7 +1,7 @@
-import ECGMonitor from './components/ECGMonitor';
+import PhysioMonitor from './components/PhysioMonitor';
 
 function App() {
-  return <ECGMonitor />;
+  return <PhysioMonitor />;
 }
 
 export default App;
